@@ -569,7 +569,7 @@ class UnifiedScraper:
     # SEARCH
     # =========================================================================
     async def search(self, q: str, page: int = 1, **kwargs) -> Dict[str, Any]:
-        """Search anime — Miruro"""
+        """Search anime — Miruro with Jikan fallback"""
         try:
             result = await self.miruro.search(q, page, **kwargs)
             if result and result.get("animes"):
@@ -580,10 +580,25 @@ class UnifiedScraper:
         except Exception as e:
             logger.warning(f"[UnifiedScraper] Search Miruro failed: {e}")
 
-        return {}
+        try:
+            logger.info("[UnifiedScraper] Search: Falling back to Jikan (MAL)")
+            result = await self.mal_fallback.search(q, page, **kwargs)
+            if result and result.get("animes"):
+                return result
+        except Exception as e:
+            logger.warning(f"[UnifiedScraper] Search Jikan fallback failed: {e}")
+
+        return {
+            "animes": [],
+            "mostPopularAnimes": [],
+            "totalPages": 1,
+            "hasNextPage": False,
+            "currentPage": page,
+            "searchQuery": q,
+        }
 
     async def search_suggestions(self, q: str) -> Dict[str, Any]:
-        """Get search suggestions — Miruro"""
+        """Get search suggestions — Miruro with Jikan fallback"""
         try:
             result = await self.miruro.search_suggestions(q)
             if result and result.get("suggestions"):
@@ -594,16 +609,33 @@ class UnifiedScraper:
         except Exception as e:
             logger.warning(f"[UnifiedScraper] Suggestions Miruro failed: {e}")
 
+        try:
+            logger.info("[UnifiedScraper] Suggestions: Falling back to Jikan (MAL)")
+            result = await self.mal_fallback.search_suggestions(q)
+            if result and result.get("suggestions"):
+                return result
+        except Exception as e:
+            logger.warning(f"[UnifiedScraper] Suggestions Jikan fallback failed: {e}")
+
         return {"suggestions": []}
 
     async def az_list(self, sort_option: str = "all", page: int = 1) -> Dict[str, Any]:
-        """Get A-Z anime list"""
+        """Get A-Z anime list — Miruro with Jikan fallback"""
         try:
             result = await self.miruro.az_list(sort_option, page)
             if result and result.get("animes"):
                 return result
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"[UnifiedScraper] az_list Miruro failed: {e}")
+
+        try:
+            logger.info("[UnifiedScraper] az_list: Falling back to Jikan (MAL)")
+            result = await self.mal_fallback.az_list(sort_option, page)
+            if result and result.get("animes"):
+                return result
+        except Exception as e:
+            logger.warning(f"[UnifiedScraper] az_list Jikan fallback failed: {e}")
+
         return {"animes": []}
 
     # =========================================================================

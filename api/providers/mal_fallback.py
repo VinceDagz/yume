@@ -646,3 +646,178 @@ class MalFallbackService:
             f"title={info.get('title')}"
         )
         return info
+
+    async def search(self, q: str, page: int = 1, **kwargs) -> Dict[str, Any]:
+        """Search anime using Jikan fallback."""
+        await self._ensure_mapping()
+        
+        # Call Jikan search
+        params = {"q": q, "page": page, "limit": 24}
+        resp = await self._jikan_get("anime", params=params)
+        if not resp or not resp.get("data"):
+            return {
+                "animes": [],
+                "mostPopularAnimes": [],
+                "totalPages": 1,
+                "hasNextPage": False,
+                "currentPage": page,
+                "searchQuery": q,
+            }
+        
+        data = resp.get("data", [])
+        pagination = resp.get("pagination", {}) or {}
+        has_next = pagination.get("has_next_page", False)
+        
+        # Filter adult and hentai
+        def filter_adult(items):
+            return [
+                item for item in items
+                if not (item.get("rating") or "").startswith("Rx")
+                and "Hentai" not in [g.get("name") for g in (item.get("genres") or [])]
+            ]
+        
+        filtered = filter_adult(data)
+        
+        def is_valid(anime):
+            name = anime.get("name", "")
+            if not name or name == "Unknown":
+                return False
+            if not anime.get("anilistId") and not anime.get("id"):
+                return False
+            return True
+            
+        animes = [
+            a for a in (
+                self._normalize_jikan_anime(item, i + 1)
+                for i, item in enumerate(filtered)
+            ) if is_valid(a)
+        ]
+        
+        # Build standard output
+        total_pages = pagination.get("last_visible_page", page)
+        
+        return {
+            "animes": animes,
+            "mostPopularAnimes": [],
+            "totalPages": total_pages,
+            "hasNextPage": has_next,
+            "currentPage": page,
+            "searchQuery": q,
+        }
+
+    async def search_suggestions(self, q: str) -> Dict[str, Any]:
+        """Search autocomplete suggestions using Jikan fallback."""
+        await self._ensure_mapping()
+        
+        params = {"q": q, "page": 1, "limit": 10}
+        resp = await self._jikan_get("anime", params=params)
+        if not resp or not resp.get("data"):
+            return {"suggestions": []}
+            
+        data = resp.get("data", [])
+        
+        def filter_adult(items):
+            return [
+                item for item in items
+                if not (item.get("rating") or "").startswith("Rx")
+                and "Hentai" not in [g.get("name") for g in (item.get("genres") or [])]
+            ]
+            
+        filtered = filter_adult(data)
+        
+        suggestions = []
+        for item in filtered:
+            mal_id = item.get("mal_id")
+            anilist_id = self.mal_to_anilist(mal_id) if mal_id else None
+            display_id = str(anilist_id) if anilist_id else str(mal_id or "")
+            
+            english_title = item.get("title_english") or item.get("title") or ""
+            if not english_title or english_title == "Unknown":
+                continue
+                
+            images = item.get("images", {})
+            poster = (
+                images.get("webp", {}).get("image_url")
+                or images.get("jpg", {}).get("image_url")
+                or ""
+            )
+            
+            more_info = []
+            fmt = item.get("type")
+            if fmt:
+                more_info.append(fmt)
+            eps = item.get("episodes")
+            status = item.get("status") or ""
+            if eps:
+                more_info.append(f"Ep {eps}")
+            elif "Not yet aired" in status:
+                more_info.append("Upcoming")
+            elif "Currently Airing" in status:
+                more_info.append("Airing")
+            year = item.get("year")
+            if year:
+                more_info.append(str(year))
+                
+            suggestions.append({
+                "id": display_id,
+                "anilistId": anilist_id,
+                "name": english_title,
+                "jname": item.get("title_japanese") or "",
+                "poster": poster,
+                "moreInfo": more_info,
+            })
+            
+        return {"suggestions": suggestions}
+
+    async def az_list(self, sort_option: str = "all", page: int = 1) -> Dict[str, Any]:
+        """A-Z anime list using Jikan fallback."""
+        await self._ensure_mapping()
+        
+        # Jikan search ordered by title asc
+        params = {"order_by": "title", "sort": "asc", "page": page, "limit": 24}
+        resp = await self._jikan_get("anime", params=params)
+        if not resp or not resp.get("data"):
+            return {
+                "animes": [],
+                "totalPages": 1,
+                "hasNextPage": False,
+                "currentPage": page,
+            }
+            
+        data = resp.get("data", [])
+        pagination = resp.get("pagination", {}) or {}
+        has_next = pagination.get("has_next_page", False)
+        
+        def filter_adult(items):
+            return [
+                item for item in items
+                if not (item.get("rating") or "").startswith("Rx")
+                and "Hentai" not in [g.get("name") for g in (item.get("genres") or [])]
+            ]
+            
+        filtered = filter_adult(data)
+        
+        def is_valid(anime):
+            name = anime.get("name", "")
+            if not name or name == "Unknown":
+                return False
+            if not anime.get("anilistId") and not anime.get("id"):
+                return False
+            return True
+            
+        animes = [
+            a for a in (
+                self._normalize_jikan_anime(item, i + 1)
+                for i, item in enumerate(filtered)
+            ) if is_valid(a)
+        ]
+        
+        total_pages = pagination.get("last_visible_page", page)
+        
+        return {
+            "animes": animes,
+            "totalPages": total_pages,
+            "hasNextPage": has_next,
+            "currentPage": page,
+        }
+
