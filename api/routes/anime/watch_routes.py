@@ -31,6 +31,9 @@ watch_routes_bp = Blueprint("watch_routes", __name__)
 # Global cache for episode data to avoid session size limits (Flask session is max 4KB)
 # Key: fetch_id, Value: all_episodes data
 EPS_CACHE = {}
+INFO_CACHE = {}
+HINDI_CACHE = {}
+SCHEDULE_CACHE = {}
 
 def _get_preferred_lang():
     """Get the user's preferred language from cookie → session → default."""
@@ -396,13 +399,13 @@ def watch(anime_id, ep_number):
     lang = _get_preferred_lang()
     preferred_provider = _get_preferred_provider()
 
-    # ── Fetch anime info ──
-    anime_info = None
-    anilist_id = None
+    # ── Fetch anime info (using global cache to avoid slow load times) ──
     anime_id_clean = anime_id.split("?", 1)[0]
+    anime_info = INFO_CACHE.get(anime_id_clean)
+    anilist_id = None
+    anime = None
 
-    try:
-        anime_info = asyncio.run(current_app.ha_scraper.get_anime_info(anime_id_clean))
+    if anime_info:
         if isinstance(anime_info, dict):
             if "info" in anime_info and isinstance(anime_info["info"], dict):
                 anime = anime_info["info"]
@@ -414,8 +417,24 @@ def watch(anime_id, ep_number):
                     anilist_id = int(anilist_id)
                 except (ValueError, TypeError):
                     anilist_id = None
-    except Exception as e:
-        current_app.logger.error(f"[Watch] Error getting anime info: {e}")
+    else:
+        try:
+            anime_info = asyncio.run(current_app.ha_scraper.get_anime_info(anime_id_clean))
+            if anime_info:
+                INFO_CACHE[anime_id_clean] = anime_info
+                if isinstance(anime_info, dict):
+                    if "info" in anime_info and isinstance(anime_info["info"], dict):
+                        anime = anime_info["info"]
+                    else:
+                        anime = anime_info
+                    anilist_id = anime.get("anilistId") or anime.get("alID")
+                    if anilist_id:
+                        try:
+                            anilist_id = int(anilist_id)
+                        except (ValueError, TypeError):
+                            anilist_id = None
+        except Exception as e:
+            current_app.logger.error(f"[Watch] Error getting anime info: {e}")
 
     # ── Fetch episodes list ──
     try:
@@ -499,28 +518,33 @@ def watch(anime_id, ep_number):
             _anime_title = anime.get("title") if isinstance(anime, dict) else None
 
             if al_id or _mal_id or _anime_title:
-                try:
-                    from api.utils.helpers import fetch_anilist_next_episode
-
-                    async def fetch_fallback_schedule():
-                        return await fetch_anilist_next_episode(
-                            anilist_id=al_id,
-                            mal_id=_mal_id,
-                            search_title=_anime_title,
-                        )
-
+                cache_key = str(al_id or _mal_id or _anime_title)
+                if cache_key in SCHEDULE_CACHE:
+                    next_episode_schedule = SCHEDULE_CACHE[cache_key]
+                else:
                     try:
-                        loop = asyncio.get_running_loop()
-                        fallback_schedule = loop.run_until_complete(fetch_fallback_schedule())
-                    except RuntimeError:
-                        fallback_schedule = asyncio.run(fetch_fallback_schedule())
+                        from api.utils.helpers import fetch_anilist_next_episode
 
-                    if fallback_schedule and fallback_schedule.get("airingTimestamp"):
-                        next_episode_schedule = fallback_schedule
-                except Exception as e:
-                    current_app.logger.error(
-                        f"Failed to fetch fallback schedule from AniList: {e}"
-                    )
+                        async def fetch_fallback_schedule():
+                            return await fetch_anilist_next_episode(
+                                anilist_id=al_id,
+                                mal_id=_mal_id,
+                                search_title=_anime_title,
+                            )
+
+                        try:
+                            loop = asyncio.get_running_loop()
+                            fallback_schedule = loop.run_until_complete(fetch_fallback_schedule())
+                        except RuntimeError:
+                            fallback_schedule = asyncio.run(fetch_fallback_schedule())
+
+                        if fallback_schedule and fallback_schedule.get("airingTimestamp"):
+                            next_episode_schedule = fallback_schedule
+                            SCHEDULE_CACHE[cache_key] = fallback_schedule
+                    except Exception as e:
+                        current_app.logger.error(
+                            f"Failed to fetch fallback schedule from AniList: {e}"
+                        )
 
         return render_template(
             "anime/watch.html",
@@ -614,23 +638,28 @@ def watch(anime_id, ep_number):
         anilist_id = int(anime_id_clean)
 
     if anilist_id:
-        try:
-            async def check_hindi():
-                embed_url = f"https://anixtv.in/anime-watch?action=hindi_1_player&id={anilist_id}&season=1&episode={ep_number}"
-                async with aiohttp.ClientSession() as session:
-                    async with session.get(embed_url, timeout=7) as resp:
-                        text = await resp.text()
-                        if "We couldn't find a Hindi Dub" not in text and "Error: Could not map" not in text and "<iframe" in text:
-                            return True
-                return False
-
+        cache_key = f"{anilist_id}_{ep_number}"
+        if cache_key in HINDI_CACHE:
+            hindi_available = HINDI_CACHE[cache_key]
+        else:
             try:
-                loop = asyncio.get_running_loop()
-                hindi_available = loop.run_until_complete(check_hindi())
-            except RuntimeError:
-                hindi_available = asyncio.run(check_hindi())
-        except Exception as e:
-            current_app.logger.warning(f"Error checking hindi availability: {e}")
+                async def check_hindi():
+                    embed_url = f"https://anixtv.in/anime-watch?action=hindi_1_player&id={anilist_id}&season=1&episode={ep_number}"
+                    async with aiohttp.ClientSession() as session:
+                        async with session.get(embed_url, timeout=1.5) as resp:
+                            text = await resp.text()
+                            if "We couldn't find a Hindi Dub" not in text and "Error: Could not map" not in text and "<iframe" in text:
+                                return True
+                    return False
+
+                try:
+                    loop = asyncio.get_running_loop()
+                    hindi_available = loop.run_until_complete(check_hindi())
+                except RuntimeError:
+                    hindi_available = asyncio.run(check_hindi())
+                HINDI_CACHE[cache_key] = hindi_available
+            except Exception as e:
+                current_app.logger.warning(f"Error checking hindi availability: {e}")
 
     # If dub requested but not available, fall back to sub
     if lang == "dub" and not dub_available:
@@ -728,28 +757,33 @@ def watch(anime_id, ep_number):
         anime_title = anime.get("title") if isinstance(anime, dict) else None
 
         if al_id or mal_id or anime_title:
-            try:
-                from api.utils.helpers import fetch_anilist_next_episode
-
-                async def fetch_fallback():
-                    return await fetch_anilist_next_episode(
-                        anilist_id=al_id,
-                        mal_id=mal_id,
-                        search_title=anime_title,
-                    )
-
+            cache_key = str(al_id or mal_id or anime_title)
+            if cache_key in SCHEDULE_CACHE:
+                next_episode_schedule = SCHEDULE_CACHE[cache_key]
+            else:
                 try:
-                    loop = asyncio.get_running_loop()
-                    fallback_schedule = loop.run_until_complete(fetch_fallback())
-                except RuntimeError:
-                    fallback_schedule = asyncio.run(fetch_fallback())
+                    from api.utils.helpers import fetch_anilist_next_episode
 
-                if fallback_schedule and fallback_schedule.get("airingTimestamp"):
-                    next_episode_schedule = fallback_schedule
-            except Exception as e:
-                current_app.logger.error(
-                    f"Failed to fetch fallback schedule from AniList in watch: {e}"
-                )
+                    async def fetch_fallback():
+                        return await fetch_anilist_next_episode(
+                            anilist_id=al_id,
+                            mal_id=mal_id,
+                            search_title=anime_title,
+                        )
+
+                    try:
+                        loop = asyncio.get_running_loop()
+                        fallback_schedule = loop.run_until_complete(fetch_fallback())
+                    except RuntimeError:
+                        fallback_schedule = asyncio.run(fetch_fallback())
+
+                    if fallback_schedule and fallback_schedule.get("airingTimestamp"):
+                        next_episode_schedule = fallback_schedule
+                        SCHEDULE_CACHE[cache_key] = fallback_schedule
+                except Exception as e:
+                    current_app.logger.error(
+                        f"Failed to fetch fallback schedule from AniList in watch: {e}"
+                    )
 
     # ── Build prev/next episode info ──────────────────────────────────────────
     # CRITICAL: episode_number/Episode MUST reflect the URL ep_number,
