@@ -412,6 +412,7 @@ def mal_callback():
         if result:
             session['mal_authenticated'] = True
             session['mal_username'] = mal_user.get('name')
+            session['mal_avatar'] = mal_user.get('picture')
             flash(f'MyAnimeList account ({mal_user.get("name")}) connected!', 'success')
         else:
             flash('Failed to save MyAnimeList connection.', 'error')
@@ -438,6 +439,7 @@ def disconnect_mal_account():
         if result:
             session.pop('mal_authenticated', None)
             session.pop('mal_username', None)
+            session.pop('mal_avatar', None)
             return jsonify({'success': True, 'message': 'MyAnimeList disconnected successfully.'})
         return jsonify({'success': False, 'message': 'Failed to disconnect.'}), 500
 

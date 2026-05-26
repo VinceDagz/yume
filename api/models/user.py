@@ -504,6 +504,7 @@ def connect_mal_to_user(user_id: int, mal_user_info: dict, access_token: str,
             "$set": {
                 "mal_id": mal_user_info.get("id"),
                 "mal_username": mal_user_info.get("name"),
+                "mal_avatar": mal_user_info.get("picture"),
                 "mal_access_token": access_token,
                 "mal_refresh_token": refresh_token,
                 "mal_token_expires_at": _time.time() + expires_in,
@@ -530,6 +531,7 @@ def delete_mal_data(user_id: int) -> bool:
                 "$unset": {
                     "mal_id": "",
                     "mal_username": "",
+                    "mal_avatar": "",
                     "mal_access_token": "",
                     "mal_refresh_token": "",
                     "mal_token_expires_at": "",

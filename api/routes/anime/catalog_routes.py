@@ -161,6 +161,7 @@ def settings():
             'mal_authenticated': bool(user.get('mal_id')),
             'mal_id': user.get('mal_id'),
             'mal_username': user.get('mal_username'),
+            'mal_avatar': user.get('mal_avatar'),
         }
         
         return render_template('shared/settings.html', user=user_data)
